@@ -76,12 +76,22 @@
 	  */
 		call: function call(options) {
 			options = options || {};
-			options.target = options.target || 'UNKNOWN';
+	
 			options.userMedia || rxwebrtc.defaults.userMedia;
 			options.peerConnection = options.peerConnection || rxwebrtc.defaults.peerConnection;
 			var session = new Session(options);
+			console.log(session.peerConnection);
+			var close = Rx.Observable.fromEvent(session.peerConnection, 'iceconnectionstatechange').pluck('target').pluck('iceConnectionState').subscribe(function (connectionState) {
+				if (connectionState === 'completed') {
+					session.status.onNext('CONNECTED');
+				} else if (connectionState === 'disconnected') {
+					session.status.onNext('DISCONNECTED');
+					session.status.onCompleted();
+				}
+			});
+			session.subscriptions.push(close);
 			session.status.onNext('USER_MEDIA');
-			var subscription = rxwebrtc.getUserMedia(options.userMedia || rxwebrtc.defaults.userMedia).flatMap(function (stream) {
+			var call = rxwebrtc.getUserMedia(options.userMedia || rxwebrtc.defaults.userMedia).flatMap(function (stream) {
 				session.peerConnection.addStream(stream);
 				session.localStream.onNext(stream);
 				session.status.onNext('LOCAL_STREAM');
@@ -95,7 +105,7 @@
 				session.status.onNext('ICE CANDIDATES: ' + iceCandidates.length);
 				rxwebrtc.output.onNext({
 					type: 'offer',
-					target: options.target,
+					recipient: options.recipient || {},
 					session: session.id,
 					offer: session.offer,
 					iceCandidates: iceCandidates
@@ -120,16 +130,16 @@
 			}).flatMap(function () {
 				return session.remoteStream.first();
 			}).subscribe(function (stream) {
-				session.status.onNext('CONNECTED');
-				console.log(stream);
+				session.status.onNext('CONNECTING');
+			}, function (error) {
+				session.status.onError(error);
 			});
-			session.subscriptions.push(subscription);
+			session.subscriptions.push(call);
 			return session;
 		},
 	
 		answer: function answer(options) {
 			options = options || {};
-			options.target = options.target || 'UNKNOWN';
 			options.userMedia || rxwebrtc.defaults.userMedia;
 			options.peerConnection = options.peerConnection || rxwebrtc.defaults.peerConnection;
 			var session = new Session(options);
@@ -158,7 +168,7 @@
 			}).subscribe(function (iceCandidates) {
 				rxwebrtc.output.onNext({
 					type: 'answer',
-					target: options.target,
+					recipient: options.recipient || {},
 					session: session.id,
 					answer: session.answer,
 					iceCandidates: iceCandidates
@@ -267,12 +277,13 @@
 	
 	var Rx = __webpack_require__(1);
 	/**
-	 * @extends IDisposable
+	 * @implements Rx.Disposable
 	 */
 	function Session(options) {
 		var _this = this;
 	
 		options = options || {};
+		this.isDisposed = false;
 	
 		if (options.id) {
 			this.id = options.id;
@@ -291,7 +302,11 @@
 	};
 	
 	Session.prototype.dispose = function () {
-		// if (this.status.value === 'CALLING')
+		if (this.isDisposed) {
+			return;
+		}
+		this.isDisposed = true;
+		this.peerConnection.close();
 		this.subscriptions.forEach(function (subscription) {
 			subscription.dispose();
 		});
