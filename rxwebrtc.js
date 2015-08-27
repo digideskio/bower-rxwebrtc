@@ -76,22 +76,12 @@
 	  */
 		call: function call(options) {
 			options = options || {};
-	
 			options.userMedia || rxwebrtc.defaults.userMedia;
 			options.peerConnection = options.peerConnection || rxwebrtc.defaults.peerConnection;
 			var session = new Session(options);
-			console.log(session.peerConnection);
-			var close = Rx.Observable.fromEvent(session.peerConnection, 'iceconnectionstatechange').pluck('target').pluck('iceConnectionState').subscribe(function (connectionState) {
-				if (connectionState === 'completed') {
-					session.status.onNext('CONNECTED');
-				} else if (connectionState === 'disconnected') {
-					session.status.onNext('DISCONNECTED');
-					session.status.onCompleted();
-				}
-			});
-			session.subscriptions.push(close);
+	
 			session.status.onNext('USER_MEDIA');
-			var call = rxwebrtc.getUserMedia(options.userMedia || rxwebrtc.defaults.userMedia).flatMap(function (stream) {
+			var call = rxwebrtc.getUserMedia(options.userMedia).flatMap(function (stream) {
 				session.peerConnection.addStream(stream);
 				session.localStream.onNext(stream);
 				session.status.onNext('LOCAL_STREAM');
@@ -145,21 +135,16 @@
 			var session = new Session(options);
 			session.status.onNext('USER_MEDIA');
 	
-			var subscription = rxwebrtc.getUserMedia(options.userMedia || rxwebrtc.defaults.userMedia).flatMap(function (stream) {
+			var answer = rxwebrtc.getUserMedia(options.userMedia).flatMap(function (stream) {
 				session.peerConnection.addStream(stream);
 				session.localStream.onNext(stream);
 				session.status.onNext('LOCAL_STREAM');
 				return rxwebrtc.setRemoteDescription(session.peerConnection, options.offer);
 			}).flatMap(function (result) {
 				session.status.onNext('REMOTE');
-				if (options.iceCandidates) {
-					options.iceCandidates.forEach(function (ice) {
-						rxwebrtc.addIceCandidate(session.peerConnection, ice).subscribe();
-					});
-				} else {
-					console.log(options);
-				}
-	
+				options.iceCandidates.forEach(function (ice) {
+					rxwebrtc.addIceCandidate(session.peerConnection, ice).subscribe();
+				});
 				return rxwebrtc.createAnswer(session.peerConnection);
 			}).flatMap(function (answer) {
 				session.answer = answer;
@@ -179,8 +164,10 @@
 					console.log('more ICE?', e.candidate);
 				});
 				session.subscriptions.push(test);
+			}, function (error) {
+				session.status.onError(error);
 			});
-			session.subscriptions.push(subscription);
+			session.subscriptions.push(answer);
 			return session;
 		},
 		gatherIceCandidates: function gatherIceCandidates(peerConnection) {
@@ -298,7 +285,15 @@
 		this.messages = rxwebrtc.input.filter(function (message) {
 			return message.session === _this.id;
 		});
-		this.subscriptions = [this.status, this.localStream];
+		var connectionState = Rx.Observable.fromEvent(this.peerConnection, 'iceconnectionstatechange').pluck('target', 'iceConnectionState').subscribe(function (connectionState) {
+			if (connectionState === 'completed') {
+				_this.status.onNext('CONNECTED');
+			} else if (connectionState === 'disconnected') {
+				_this.status.onNext('DISCONNECTED');
+				_this.status.onCompleted();
+			}
+		});
+		this.subscriptions = [this.status, this.localStream, connectionState];
 	};
 	
 	Session.prototype.dispose = function () {
