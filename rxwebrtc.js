@@ -95,7 +95,8 @@
 				session.status.onNext('ICE CANDIDATES: ' + iceCandidates.length);
 				rxwebrtc.output.onNext({
 					type: 'offer',
-					recipient: options.recipient || {},
+					sender: session.sender,
+					recipient: session.recipient,
 					session: session.id,
 					offer: session.offer,
 					iceCandidates: iceCandidates
@@ -112,6 +113,12 @@
 					return message.type === 'answer';
 				}).first();
 			}).flatMap(function (message) {
+				if (message.sender) {
+					rxwebrtc.merge(session.recipient, message.sender);
+				}
+				if (message.recipient) {
+					rxwebrtc.merge(session.sender, message.recipient);
+				}
 				session.status.onNext('ANSWERED');
 				message.iceCandidates.forEach(function (ice) {
 					rxwebrtc.addIceCandidate(session.peerConnection, ice).subscribe();
@@ -153,7 +160,8 @@
 			}).subscribe(function (iceCandidates) {
 				rxwebrtc.output.onNext({
 					type: 'answer',
-					recipient: options.recipient || {},
+					sender: session.sender,
+					recipient: session.recipient,
 					session: session.id,
 					answer: session.answer,
 					iceCandidates: iceCandidates
@@ -219,7 +227,16 @@
 				});
 			});
 		},
-		getUserMedia: getUserMedia
+		getUserMedia: getUserMedia,
+		merge: function merge(target, source) {
+			source = source || {};
+			for (var key in source) {
+				if (source.hasOwnProperty(key)) {
+					target[key] = source[key];
+				}
+			}
+			return target;
+		}
 	};
 	
 	window.rxwebrtc = rxwebrtc;
@@ -270,6 +287,8 @@
 		var _this = this;
 	
 		options = options || {};
+		this.sender = options.sender || {};
+		this.recipient = options.recipient || {};
 		this.isDisposed = false;
 	
 		if (options.id) {
