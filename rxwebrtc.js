@@ -305,7 +305,11 @@
 		this.messages = rxwebrtc.input.filter(function (message) {
 			return message.session === _this.id;
 		});
-		var connectionState = Rx.Observable.fromEvent(this.peerConnection, 'iceconnectionstatechange').pluck('target', 'iceConnectionState').subscribe(function (connectionState) {
+		var connectionState = Rx.Observable.fromEvent(this.peerConnection, 'iceconnectionstatechange').map(function (e) {
+			if (e.target) {
+				return e.target.iceConnection;
+			}
+		}).subscribe(function (connectionState) {
 			if (connectionState === 'connected' || connectionState === 'completed') {
 				if (_this.status.value !== 'CONNECTED') {
 					_this.status.onNext('CONNECTED');
@@ -323,9 +327,6 @@
 			return;
 		}
 		this.isDisposed = true;
-		if (this.localStream.value) {
-			this.localStream.value.stop();
-		};
 		this.peerConnection.close();
 		this.subscriptions.forEach(function (subscription) {
 			subscription.dispose();
