@@ -79,9 +79,81 @@
 			options.userMedia || rxwebrtc.defaults.userMedia;
 			options.peerConnection = options.peerConnection || rxwebrtc.defaults.peerConnection;
 			var session = new Session(options);
-	
 			session.status.onNext('USER_MEDIA');
 			var call = rxwebrtc.getUserMedia(options.userMedia).flatMap(function (stream) {
+				session.peerConnection.addStream(stream);
+				session.localStream.onNext(stream);
+				session.status.onNext('LOCAL_STREAM');
+				session.status.onNext('RSVP');
+				rxwebrtc.output.onNext({
+					type: 'rsvp',
+					sender: session.sender,
+					recipient: session.recipient,
+					session: session.id
+				});
+	
+				// offer: session.offer,
+				// iceCandidates: iceCandidates
+				return session.messages.filter(function (message) {
+					return message.type === 'offer';
+				}).first();
+			}).flatMap(function (message) {
+				session.status.onNext('OFFER_RECEIVED');
+				if (message.sender) {
+					rxwebrtc.merge(session.recipient, message.sender);
+				}
+				if (message.recipient) {
+					rxwebrtc.merge(session.sender, message.recipient);
+				}
+				session.iceCandidates = message.iceCandidates;
+				session.status.onNext('SET_REMOTE');
+				return rxwebrtc.setRemoteDescription(session.peerConnection, message.offer);
+			}).flatMap(function (result) {
+				session.status.onNext('SET_ICE');
+				session.iceCandidates.forEach(function (ice) {
+					rxwebrtc.addIceCandidate(session.peerConnection, ice).subscribe();
+				});
+				return rxwebrtc.createAnswer(session.peerConnection);
+			}).flatMap(function (answer) {
+				session.answer = answer;
+				session.status.onNext('SET_LOCAL');
+				session.peerConnection.setLocalDescription(answer); // Triggers ICE gathering
+				return rxwebrtc.gatherIceCandidates(session.peerConnection);
+			}).flatMap(function (iceCandidates) {
+				session.status.onNext('ICE CANDIDATES: ' + iceCandidates.length);
+				session.status.onNext('SEND_ANSWER');
+				rxwebrtc.output.onNext({
+					type: 'answer',
+					sender: session.sender,
+					recipient: session.recipient,
+					session: session.id,
+					answer: session.answer,
+					iceCandidates: iceCandidates
+				});
+				var test = Rx.Observable.fromEvent(session.peerConnection, 'icecandidate').filter(function (e) {
+					return e.candidate;
+				}).subscribe(function (e) {
+					console.log('more ICE?', e.candidate);
+				});
+				session.subscriptions.push(test);
+				return session.status.skipWhile(function (status) {
+					return status !== 'CONNECTED';
+				}).timeout(40000, 'Unable to setup a connection in 40 seconds');
+			}).subscribe(function (status) {}, function (error) {
+				session.status.onError(error);
+			});
+			session.subscriptions.push(call);
+			return session;
+		},
+	
+		answer: function answer(options) {
+			options = options || {};
+			options.userMedia || rxwebrtc.defaults.userMedia;
+			options.peerConnection = options.peerConnection || rxwebrtc.defaults.peerConnection;
+			var session = new Session(options);
+			session.status.onNext('USER_MEDIA');
+	
+			var answer = rxwebrtc.getUserMedia(options.userMedia).flatMap(function (stream) {
 				session.peerConnection.addStream(stream);
 				session.localStream.onNext(stream);
 				session.status.onNext('LOCAL_STREAM');
@@ -126,54 +198,12 @@
 				return rxwebrtc.setRemoteDescription(session.peerConnection, message.answer);
 			}).flatMap(function () {
 				return session.remoteStream.first();
-			}).subscribe(function (stream) {
+			}).flatMap(function (stream) {
 				session.status.onNext('CONNECTING');
-			}, function (error) {
-				session.status.onError(error);
-			});
-			session.subscriptions.push(call);
-			return session;
-		},
-	
-		answer: function answer(options) {
-			options = options || {};
-			options.userMedia || rxwebrtc.defaults.userMedia;
-			options.peerConnection = options.peerConnection || rxwebrtc.defaults.peerConnection;
-			var session = new Session(options);
-			session.status.onNext('USER_MEDIA');
-	
-			var answer = rxwebrtc.getUserMedia(options.userMedia).flatMap(function (stream) {
-				session.peerConnection.addStream(stream);
-				session.localStream.onNext(stream);
-				session.status.onNext('LOCAL_STREAM');
-				return rxwebrtc.setRemoteDescription(session.peerConnection, options.offer);
-			}).flatMap(function (result) {
-				session.status.onNext('REMOTE');
-				options.iceCandidates.forEach(function (ice) {
-					rxwebrtc.addIceCandidate(session.peerConnection, ice).subscribe();
-				});
-				return rxwebrtc.createAnswer(session.peerConnection);
-			}).flatMap(function (answer) {
-				session.answer = answer;
-				session.peerConnection.setLocalDescription(answer); // Triggers ICE gathering
-				return rxwebrtc.gatherIceCandidates(session.peerConnection);
-			}).subscribe(function (iceCandidates) {
-				session.status.onNext('ICE CANDIDATES: ' + iceCandidates.length);
-				rxwebrtc.output.onNext({
-					type: 'answer',
-					sender: session.sender,
-					recipient: session.recipient,
-					session: session.id,
-					answer: session.answer,
-					iceCandidates: iceCandidates
-				});
-				var test = Rx.Observable.fromEvent(session.peerConnection, 'icecandidate').filter(function (e) {
-					return e.candidate;
-				}).subscribe(function (e) {
-					console.log('more ICE?', e.candidate);
-				});
-				session.subscriptions.push(test);
-			}, function (error) {
+				return session.status.skipWhile(function (status) {
+					return status !== 'CONNECTED';
+				}).timeout(30000, 'Unable to setup a connection in 30 seconds');
+			}).subscribe(function (status) {}, function (error) {
 				session.status.onError(error);
 			});
 			session.subscriptions.push(answer);
@@ -305,7 +335,11 @@
 		this.messages = rxwebrtc.input.filter(function (message) {
 			return message.session === _this.id;
 		});
-		var connectionState = Rx.Observable.fromEvent(this.peerConnection, 'iceconnectionstatechange').pluck('target', 'iceConnectionState').subscribe(function (connectionState) {
+		var connectionState = Rx.Observable.fromEvent(this.peerConnection, 'iceconnectionstatechange').map(function (e) {
+			if (e.target) {
+				return e.target.iceConnectionState;
+			}
+		}).subscribe(function (connectionState) {
 			if (connectionState === 'connected' || connectionState === 'completed') {
 				if (_this.status.value !== 'CONNECTED') {
 					_this.status.onNext('CONNECTED');
@@ -323,10 +357,13 @@
 			return;
 		}
 		this.isDisposed = true;
-		if (this.localStream.value) {
-			this.localStream.value.stop();
-		};
 		this.peerConnection.close();
+		var mediaStream = this.localStream.value;
+		if (mediaStream) {
+			mediaStream.getTracks().map(function (track) {
+				track.stop();
+			});
+		}
 		this.subscriptions.forEach(function (subscription) {
 			subscription.dispose();
 		});
