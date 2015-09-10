@@ -307,7 +307,7 @@
 		});
 		var connectionState = Rx.Observable.fromEvent(this.peerConnection, 'iceconnectionstatechange').map(function (e) {
 			if (e.target) {
-				return e.target.iceConnection;
+				return e.target.iceConnectionState;
 			}
 		}).subscribe(function (connectionState) {
 			if (connectionState === 'connected' || connectionState === 'completed') {
