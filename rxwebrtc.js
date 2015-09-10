@@ -126,9 +126,12 @@
 				return rxwebrtc.setRemoteDescription(session.peerConnection, message.answer);
 			}).flatMap(function () {
 				return session.remoteStream.first();
-			}).subscribe(function (stream) {
+			}).flatMap(function (stream) {
 				session.status.onNext('CONNECTING');
-			}, function (error) {
+				return session.status.skipWhile(function (status) {
+					return status !== 'CONNECTED';
+				}).timeout(30000, 'Unable to setup a connection in 30 seconds');
+			}).subscribe(function (status) {}, function (error) {
 				session.status.onError(error);
 			});
 			session.subscriptions.push(call);
@@ -157,7 +160,7 @@
 				session.answer = answer;
 				session.peerConnection.setLocalDescription(answer); // Triggers ICE gathering
 				return rxwebrtc.gatherIceCandidates(session.peerConnection);
-			}).subscribe(function (iceCandidates) {
+			}).flatMap(function (iceCandidates) {
 				session.status.onNext('ICE CANDIDATES: ' + iceCandidates.length);
 				rxwebrtc.output.onNext({
 					type: 'answer',
@@ -173,7 +176,10 @@
 					console.log('more ICE?', e.candidate);
 				});
 				session.subscriptions.push(test);
-			}, function (error) {
+				return session.status.skipWhile(function (status) {
+					return status !== 'CONNECTED';
+				}).timeout(40000, 'Unable to setup a connection in 40 seconds');
+			}).subscribe(function (status) {}, function (error) {
 				session.status.onError(error);
 			});
 			session.subscriptions.push(answer);
