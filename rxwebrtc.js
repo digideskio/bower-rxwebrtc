@@ -328,6 +328,12 @@
 		}
 		this.isDisposed = true;
 		this.peerConnection.close();
+		var mediaStream = this.localStream.value;
+		if (mediaStream) {
+			mediaStream.getTracks().map(function (track) {
+				track.stop();
+			});
+		}
 		this.subscriptions.forEach(function (subscription) {
 			subscription.dispose();
 		});
